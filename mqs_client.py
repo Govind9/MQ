@@ -30,11 +30,11 @@ class MqsClient(object):
             self.mqs_client.close()
         self.mqs_client = None
         
-    def send_push_request(self, body):
+    def send_push_request(self, bodies):
         try:
             message = json.dumps({
                 "type": "push",
-                "body": body
+                "body": bodies
             })
             return self.send_wait(self.mqs_client, message)
         except Exception as e:
@@ -50,11 +50,11 @@ class MqsClient(object):
         except Exception as e:
             raise(e)
     
-    def send_pop_request(self, index):
+    def send_pop_request(self, indexes):
         try:
             message = json.dumps({
                 'type': 'pop',
-                'body': index
+                'body': indexes
             })
             return self.send_wait(self.mqs_client, message)
         except Exception as e:

@@ -15,6 +15,7 @@ class Notifier(object):
         self.notifier = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.notifier.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.notifier.setblocking(False)
+        self.wait_seven_seconds  = False
         self.online = False
         
         #prepare data structure to hold connections
@@ -111,7 +112,7 @@ class Notifier(object):
                 self.mqs_label.configure(text = "DOWN")
             else:
                 self.mqs_label.configure(text = "UP")
-                
+            
             done, err = self.mqs_client.send_pole_request()
             if done:
                 self.events.insert("end", 'Pole Request Sent.\n')
@@ -120,7 +121,15 @@ class Notifier(object):
                 self.events.insert("end", 'Could not send Pole Request.\n')
                 self.events.insert("end", 'MQS unavailable.\n')
                 self.events.insert("end", '#'*15+'\n')
-            sleep(2)
+            #wait a couple of seconds, let dust settle from the above sent request
+            for i in range(2):
+                self.time_label.configure(text = str(2 - i))
+                sleep(1)
+            if self.wait_seven_seconds:
+                self.wait_seven_seconds = False
+                for i in range(5):
+                    self.time_label.configure(text = str(5 - i))
+                    sleep(1)
             
     def accept_connections(self):
         while self.online:
@@ -187,8 +196,11 @@ class Notifier(object):
                 
                 #decide course of action based on message type and purpose:
                 if msg['type'] == 'pole_result':
+                    self.pole_status = "response_received"
                     response = msg['messages']
-                    self.notify_and_pole(response)
+                    self.events.insert("end", 'Response from MQS:\n{}\n'.format(json.dumps(response, indent = 1)))
+                    self.events.insert("end", '#'*15+'\n')
+                    self.notify_clients(response)
                 if msg['type'] == 'quit':
                     self.mqs_client.close()
                     self.events.insert("end", 'MQS offline.\n')
@@ -198,42 +210,57 @@ class Notifier(object):
             except Exception as e:
                 raise(e)
                 
-    def notify_and_pole(response):
-        decision_found = False
+    def notify_clients(self, response):
+        #find decisions that are completed and ready to be reported
+        completed_decisions = {}
         for id in response:
             if response[id]["from"] == "advisor" and response[id]["decision"] != "evaluation pending":
-                decision_found = True
-                self.events.insert("end", 'NOTIFYING CLIENTS FOLLOWING DECISION:\n')
-                self.events.insert("end", 'Student: {}\n'.format(response[id]['student_name']))
-                self.events.insert("end", 'Subject: {}\n'.format(response[id]['subject_name']))
-                self.events.insert("end", 'Decision: {}\n'.format(response[id]['decision']))
+                completed_decisions[id] = response[id]
+        if len(completed_decisions) == 0:
+            self.events.insert("end", 'NO COMPLETED DECISIONS TO REPORT:\n')
+            self.wait_seven_seconds = True
+            return
+        
+        #turn completed_decisions into a notification
+        notification = {
+            "type": "decisions",
+            "body": []
+        }
+        for id in completed_decisions:
+            notification["body"].append(completed_decisions[id])
+            self.events.insert("end", 'FOLLOWING DECISION TO BE NOTIFIED:\n')
+            self.events.insert("end", 'Student: {}\n'.format(completed_decisions[id]['student_name']))
+            self.events.insert("end", 'Subject: {}\n'.format(completed_decisions[id]['subject_name']))
+            self.events.insert("end", 'Decision: {}\n'.format(completed_decisions[id]['decision']))
+            self.events.insert("end", '#'*15+'\n')
+        
+        #report completed_decisions
+        client_found = False
+        for index in self.clients:
+            if self.clients[index] is None:
+                continue
+            client_found = True
+            self.send_wait(self.clients[index], json.dumps(notification))
+        
+        #pop the completed decision messages from mqs if the notification was sent to atleast one client
+        if client_found:
+            self.events.insert("end", 'NOTIFICATION SENT TO CONNECTED CLIENTS\n')
+            self.events.insert("end", '#'*15+'\n')
+            ids = [id for id in completed_decisions]
+            if self.mqs_client.mqs_client == None:
+                self.mqs_client = MqsClient()
+            done, err = self.mqs_client.send_pop_request(ids)
+            if done:
+                self.events.insert("end", 'NOTIFIED DECISIONS POPPED FROM MQS\n')
                 self.events.insert("end", '#'*15+'\n')
-                
-                notification = json.dumps({
-                    "type": "decision",
-                    "body": response[id]
-                })
-                
-                for index in self.clients:
-                    if self.clients[index] is None:
-                        continue
-                    self.send_wait(self.clients[index], notification)
-                #pop this decision message from mqs
-                if self.mqs_client.mqs_client == None:
-                    self.mqs_client = MqsClient()
-                done, err = self.mqs_client.send_pop_request(id)
-                if done:
-                    self.events.insert("end", 'DECISION POPPED FROM MQS\n')
-                    self.events.insert("end", '#'*15+'\n')
-                else:
-                    self.events.insert("end", 'ERROR IN POPPING DECISION\n')
-                    self.events.insert("end", 'MQS unavailable.\n')
-                    self.events.insert("end", '#'*15+'\n')
-        Wait = 2 if decision_found else 7
-        for i in range(Wait):
-            self.time_label.configure(text = str(Wait - i))
-            sleep(1)
-        self.request_pole()
+            else:
+                self.events.insert("end", 'ERROR IN POPPING NOTIFIED DECISION\n')
+                self.events.insert("end", 'MQS unavailable.\n')
+                self.events.insert("end", '#'*15+'\n')
+        else:
+            self.events.insert("end", 'NO CLIENTS CONNECTED TO SEND NOTIFICATION\n')
+            self.events.insert("end", '#'*15+'\n')
+            self.wait_seven_seconds = True
     
     def count_online(self):
         online_count = 0

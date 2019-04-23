@@ -122,6 +122,8 @@ class Mqs(object):
             except BlockingIOError as e:
                 continue
             except Exception as e:
+                print(str(e))
+                print("heheh")
                 raise(e)
             
     def count_online(self):
@@ -190,27 +192,28 @@ class Mqs(object):
             
     def push(self, msg):
         try:
-            self.messages[self.offset + 1] = msg['body']
-            self.offset += 1
-            self.msg_count += 1
-            self.count_label.configure(text = str(self.msg_count))
-            self.events.insert("end", 'Added record: \n{}\n'.format(msg['body']))
-            self.events.insert("end", '#'*15+'\n')
-            self.commit()
+            for m in msg['body']:
+                self.messages[str(self.offset + 1)] = m
+                self.offset += 1
+                self.msg_count += 1
+                self.count_label.configure(text = str(self.msg_count))
+                self.events.insert("end", 'Added record: \n{}\n'.format(m))
+                self.events.insert("end", '#'*15+'\n')
+                self.commit()
         except Exception as e:
             raise(e)
         
     def pop(self, msg):
         try:
-            id = int(msg['body'])
-            message = self.messages.pop(id, None)
-            if message is not None:
-                self.msg_count -= 1
-                self.count_label.configure(text = str(self.msg_count))
-                self.events.insert("end", 'Removed record: \n{}\n'.format(message))
-                self.events.insert("end", '#'*15+'\n')
-            self.commit()
-            return message
+            ids = msg['body']
+            for id in ids:
+                message = self.messages.pop(id, None)
+                if message is not None:
+                    self.msg_count -= 1
+                    self.count_label.configure(text = str(self.msg_count))
+                    self.events.insert("end", 'Removed record: \n{}\n'.format(message))
+                    self.events.insert("end", '#'*15+'\n')
+                    self.commit()
         except Exception as e:
             raise(e)
         
@@ -222,7 +225,7 @@ class Mqs(object):
             }
             for id in self.messages:
                 if self.messages[id]:
-                    response['messages'][id] = messages[id]
+                    response['messages'][id] = self.messages[id]
                     
             self.send_wait(client, json.dumps(response))
         except Exception as e:
@@ -232,7 +235,7 @@ class Mqs(object):
         try:
             with open(self.store, "r") as file:
                 self.messages = json.loads(file.read())
-            self.offset = sorted(self.messages)[-1]
+            self.offset = int(sorted(self.messages)[-1])
             self.msg_count = 0
             for i in self.messages:
                 if self.messages[i] is not None: self.msg_count += 1
